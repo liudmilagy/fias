@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>ФИАС. Загрузка данных</title>
+    <link type="text/css" rel="stylesheet" href="css/materialize.min.css" media="screen,projection">
+    <script src="js/jquery-3.5.1.min.js"></script>
+    <script src="js/materialize.min.js"></script>
+</head>
+<body>
+<div class="container">
+    <div class="row">
+        <form method="post" enctype="multipart/form-data" id="form">
+            <div class="file-field input-field">
+                <div class="btn">
+                    <span>Файл</span>
+                    <input type="file" name="file" id="file">
+                </div>
+                <div class="file-path-wrapper">
+                    <input class="file-path validate" type="text">
+                </div>
+            </div>
+            <button class="waves-effect waves-light btn" type="button" id="button-submit">Обработать</button>
+        </form>
+        <div class="progress hide">
+            <div class="indeterminate"></div>
+        </div>
+    </div>
+</div>
+<script>
+        $('#button-submit').click(function () {
+
+            $('#button-submit').addClass('disabled');
+            $('.progress').removeClass('hide');
+
+            const form = $('#form')[0];
+            const data = new FormData(form);
+            $.ajax({
+                type: 'POST',
+                enctype: 'multipart/form-data',
+                url: '/process_file',
+                data: data,
+                processData: false,
+                contentType: false,
+                cache: false,
+                success: function (data) {
+                    console.log(data);
+                    $('#button-submit').removeClass('disabled');
+                    $('.progress').addClass('hide');
+                    alert(data);
+                },
+                error: function (e) {
+                    console.log(e);
+                    $('#button-submit').removeClass('disabled');
+                    $('.progress').addClass('hide');
+                    alert(e);
+                }
+            });
+        })
+    </script>
+</body>
+</html>
