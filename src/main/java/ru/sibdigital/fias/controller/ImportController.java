@@ -29,10 +29,7 @@ public class ImportController {
     public @ResponseBody
     String processFile(@RequestParam(name = "file") MultipartFile multipartFile) throws IOException {
         String tmpPath = System.getProperty("java.io.tmpdir");
-        if (System.getProperty("os.name").toLowerCase().contains("win")) {
-            tmpPath += "\\";
-        }
-        else {
+        if (!System.getProperty("os.name").toLowerCase().contains("win")) {
             tmpPath += "/";
         }
         File file = new File(tmpPath + multipartFile.getOriginalFilename());
