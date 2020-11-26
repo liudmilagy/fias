@@ -7,9 +7,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.TransactionStatus;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionCallbackWithoutResult;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.w3c.dom.Document;
@@ -17,6 +19,9 @@ import org.w3c.dom.NamedNodeMap;
 import org.w3c.dom.Node;
 import org.xml.sax.SAXException;
 
+import javax.persistence.EntityManager;
+import javax.persistence.PersistenceContext;
+import javax.persistence.Query;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.parsers.ParserConfigurationException;
@@ -31,6 +36,9 @@ public class ImportServiceImpl implements ru.sibdigital.fias.service.ImportServi
 
     private final static Logger fiasLogger = LoggerFactory.getLogger("fiasLogger");
 
+    @PersistenceContext
+    private EntityManager entityManager;
+
     @Autowired
     private TransactionTemplate transactionTemplate;
 
@@ -38,7 +46,7 @@ public class ImportServiceImpl implements ru.sibdigital.fias.service.ImportServi
     JdbcTemplate jdbcTemplate;
 
     @Value("./xsds/example/")
-    private String fiasPath;
+    private String fiasTestPath;
 
     @Value("${spring.datasource.url}")
     private String url;
@@ -93,10 +101,10 @@ public class ImportServiceImpl implements ru.sibdigital.fias.service.ImportServi
 
         Collection<File> zipFiles = null;
         try {
-            zipFiles = FileUtils.listFiles(new File(fiasPath),
+            zipFiles = FileUtils.listFiles(new File(fiasTestPath),
                     new RegexFileFilter("^(.*?)"), DirectoryFileFilter.DIRECTORY);
         } catch (Exception e) {
-            fiasLogger.info("Не удалось получить доступ к " + fiasPath);
+            fiasLogger.info("Не удалось получить доступ к " + fiasTestPath);
             e.printStackTrace();
         }
 
@@ -110,7 +118,7 @@ public class ImportServiceImpl implements ru.sibdigital.fias.service.ImportServi
                 }
             }
         } else {
-            fiasLogger.error("Файлы не найдены по пути " + fiasPath);
+            fiasLogger.error("Файлы не найдены по пути " + fiasTestPath);
         }
         fiasLogger.info("Импорт тестовых данных ФИАС окончен");
     }
@@ -133,7 +141,7 @@ public class ImportServiceImpl implements ru.sibdigital.fias.service.ImportServi
                 break;
             case ("param"):
                 subFileName = subFileName.substring(0, subFileName.indexOf("_params")).toLowerCase();
-                if (subFileName.equals("address_objects_params")) {
+                if (subFileName.equals("address_objects")) {
                     tableName = "addr_obj_param";
                 }
                 else {
@@ -188,16 +196,27 @@ public class ImportServiceImpl implements ru.sibdigital.fias.service.ImportServi
     /**
      * Получаем все имена колонок существующей таблицы
      */
-    private Set<String> getTableColumnNames(String tablename) throws SQLException {
+    private Set<String> getTableColumnNames(String tablename) {
         Set<String> set = new HashSet<String>();
 
-        Connection connection = DriverManager.getConnection(url, username, password);
-        Statement statement = connection.createStatement();
-        ResultSet resultSet = statement.executeQuery("SELECT * FROM "+ tablename);
-        ResultSetMetaData metadata = resultSet.getMetaData();
-        for (int i = 1; i <= metadata.getColumnCount(); i++) {
-            String columnName = metadata.getColumnName(i);
-            set.add(columnName);
+        String selectQuery = "SELECT * FROM %s";
+        try {
+            Connection connection = DriverManager.getConnection(url, username, password);
+            Statement statement = connection.createStatement();
+            ResultSet resultSet = statement.executeQuery(String.format(selectQuery, tablename));
+            ResultSetMetaData metadata = resultSet.getMetaData();
+            for (int i = 1; i <= metadata.getColumnCount(); i++) {
+                String columnName = metadata.getColumnName(i);
+                set.add(columnName);
+            }
+        }
+        catch (SQLException e) {
+            fiasLogger.error("Не удалось подключиться к БД и получить имена колонок таблицы.");
+            e.printStackTrace();
+        }
+        catch (Exception e) {
+            fiasLogger.error("Не удалось получить имена колонок таблицы.");
+            e.printStackTrace();
         }
 
         return set;
@@ -210,6 +229,7 @@ public class ImportServiceImpl implements ru.sibdigital.fias.service.ImportServi
         String query = "";
 
         if (node.hasAttributes()) {
+            String queryTemplate = "INSERT INTO %s(%s) VALUES(%s) ON CONFLICT(%s) DO UPDATE SET %s;";
             NamedNodeMap nodeMap = node.getAttributes();
 
             String queryParams = "";
@@ -230,13 +250,12 @@ public class ImportServiceImpl implements ru.sibdigital.fias.service.ImportServi
                 }
             }
 
-            // Удаляем посл. запятые
+            // Удаляем последние (лишние) запятые
             queryParams = queryParams.substring(0, queryParams.length() - 1);
             queryValues = queryValues.substring(0, queryValues.length() - 1);
             queryUpsert = queryUpsert.substring(0, queryUpsert.length() - 1);
 
-            query = "INSERT INTO " + tableName + "(" + queryParams + ")" +
-                    " VALUES(" + queryValues +") ON CONFLICT (" + primaryKeyName + ") DO UPDATE SET " + queryUpsert + ";";
+            query = String.format(queryTemplate, tableName, queryParams, queryValues, primaryKeyName, queryUpsert);
         }
 
         return query;
@@ -250,13 +269,19 @@ public class ImportServiceImpl implements ru.sibdigital.fias.service.ImportServi
                 while (entries.hasMoreElements()) {
                     ZipEntry zipEntry = entries.nextElement();
                     String zipEntryName = zipEntry.getName().toLowerCase();
+
                     fiasLogger.info("Обход файлов. Папка/файл: " + zipEntryName);
-                    if (zipEntryName.length() > 5 && zipEntryName.substring(zipEntryName.length()-4).equals(".xml")) {
+
+                    if (zipEntryName.length() > 5 && zipEntryName.substring(zipEntryName.length()-4).equals(".xml")) { // Проверка на формат xml
                         InputStream is = zipFile.getInputStream(zipEntry);
                         String filename = zipEntryName;
+
+                        // Находим наименование файла
                         if (zipEntryName.lastIndexOf('/') > 0) {
                             filename = zipEntryName.substring(zipEntryName.lastIndexOf('/'));
                         }
+
+                        // Обработка xml файла
                         processFiasFileByDOM(is, filename);
                     }
                 }
@@ -282,11 +307,30 @@ public class ImportServiceImpl implements ru.sibdigital.fias.service.ImportServi
         }
     }
 
+    @Transactional
+    void createAndExecuteInserts(Node root, String tableName, String primaryKeyName, Set<String> finalColumnNames) {
+        fiasLogger.info("Создание и выполнение inserts. Начало");
+
+        transactionTemplate.execute(new TransactionCallbackWithoutResult() {
+            protected void doInTransactionWithoutResult(TransactionStatus status) {
+                for (int j = 0; j < root.getChildNodes().getLength(); j++) {
+                    Node node = root.getChildNodes().item(j);
+                    String insertQuery = generateInsertQuery(node, tableName, primaryKeyName, finalColumnNames);
+                    Query query = entityManager.createNativeQuery(insertQuery);
+                    query.executeUpdate();
+                }
+            }
+        });
+
+        fiasLogger.info("Создание и выполнение inserts. Конец");
+    }
+
     /**
      * Метод обработки по узлам Xml-файла с помощью DOM
      */
     private void processFiasFileByDOM(InputStream is, String filename) throws ParserConfigurationException, IOException, SAXException {
         fiasLogger.info("Обработка файла " + filename);
+
         DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
         DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
         Document doc = dBuilder.parse(is);
@@ -296,39 +340,16 @@ public class ImportServiceImpl implements ru.sibdigital.fias.service.ImportServi
             Node root = doc.getChildNodes().item(i);
             if (root.getChildNodes().getLength() > 0) {
                 Node firstNode = root.getChildNodes().item(0);
-                // Найдем 1 раз наим-е таблицы, имя primary key, имена колонок таблицы
+
+                // Найдем по первому элементу наим-е таблицы, имя primary key, имена колонок таблицы
                 String nodeName = firstNode.getNodeName();
                 String tableName = findTableName(nodeName, filename);
                 String primaryKeyName = getPrimaryKeyName(tableName);
 
-                Set<String> columnNames = new HashSet<>();
-                try {
-                    columnNames = getTableColumnNames(tableName);
-                }
-                catch (SQLException e) {
-                    fiasLogger.error("Не удалось подключиться к БД и получить имена колонок таблицы.");
-                    e.printStackTrace();
-                }
-                catch (Exception e) {
-                    fiasLogger.error("Не удалось получить имена колонок таблицы.");
-                    e.printStackTrace();
-                }
-                Set<String> finalColumnNames = columnNames;
+                Set<String> columnNames = getTableColumnNames(tableName);
 
-                fiasLogger.info("Создание и выполнение inserts");
-
-
-                transactionTemplate.execute(new TransactionCallbackWithoutResult() {
-                    protected void doInTransactionWithoutResult(TransactionStatus status) {
-                        for (int j = 0; j < root.getChildNodes().getLength(); j++) {
-                            Node node = root.getChildNodes().item(j);
-                            String insertQuery = generateInsertQuery(node, tableName, primaryKeyName, finalColumnNames);
-                            jdbcTemplate.update(insertQuery);
-                        }
-                    }
-                });
+                createAndExecuteInserts(root, tableName, primaryKeyName, columnNames);
             }
-
         }
         fiasLogger.info("Обработка файла " + filename + " закончена");
     }
