@@ -206,39 +206,6 @@ public class ImportServiceImpl implements ru.sibdigital.fias.service.ImportServi
     /**
      * Метод генерации SQL query Insert
      */
-    private String generateInsertQuery(Node node, String filename) {
-        String query = "";
-        String nodeName = node.getNodeName();
-        String tableName = findTableName(nodeName, filename);
-        String primaryKeyName = getPrimaryKeyName(tableName);
-        if (node.hasAttributes()) {
-            NamedNodeMap nodeMap = node.getAttributes();
-
-            String queryParams = "";
-            String queryValues = "";
-            String queryUpsert = "";
-
-            for (int k = 0; k < nodeMap.getLength(); k++) {
-                Node attribute = nodeMap.item(k);
-                String key = attribute.getNodeName().toLowerCase();
-                String value = attribute.getNodeValue();
-                queryParams += "\"" + key + "\",";
-                queryValues += "'" + value + "',";
-                queryUpsert += (key.equals("desc") ? "\"desc\"" : key) + " = EXCLUDED." + key + ",";
-            }
-
-            // Удаляем посл. запятые
-            queryParams = queryParams.substring(0, queryParams.length() - 1);
-            queryValues = queryValues.substring(0, queryValues.length() - 1);
-            queryUpsert = queryUpsert.substring(0, queryUpsert.length() - 1);
-
-            query = "INSERT INTO " + tableName + "(" + queryParams + ")" +
-                    " VALUES(" + queryValues +") ON CONFLICT (" + primaryKeyName + ") DO UPDATE SET " + queryUpsert + ";";
-        }
-
-        return query;
-    }
-
     private String generateInsertQuery(Node node, String tableName, String primaryKeyName, Set<String> columnNames) {
         String query = "";
 
