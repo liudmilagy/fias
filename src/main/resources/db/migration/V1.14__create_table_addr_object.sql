@@ -1,7 +1,7 @@
-create table if not exists object
+create table if not exists addr_object
 (
     id         bigint not null
-        constraint object_pk
+        constraint addr_object_pk
             primary key,
     objectid   bigint,
     objectguid varchar(36),
